@@ -74,13 +74,30 @@ else
   echo "claude: no active session to fork (CLAUDE_CODE_SESSION_ID not set)" >&2
 fi
 
+# ── Config ───────────────────────────────────────────────────────────────────
+
+config_file="$HOME/.config/create_worktree/config.json"
+claude_cmd="claude"
+claude_args=""
+claude_env=""
+
+if [ -f "$config_file" ]; then
+  claude_cmd=$(jq -r '.command // "claude"' "$config_file")
+  claude_args=$(jq -r '(.args // []) | join(" ")' "$config_file")
+  claude_env=$(jq -r '(.env // {}) | to_entries | map("\(.key)=\(.value)") | join(" ")' "$config_file")
+fi
+
 # ── Open new iTerm2 tab ───────────────────────────────────────────────────────
 
+env_prefix=""
+[ -n "$claude_env" ] && env_prefix="env $claude_env "
+
 if [ -n "$session_id" ]; then
-  cmd="cd '$new_path' && claude --resume '$session_id' --fork-session"
+  cmd="cd '$new_path' && ${env_prefix}${claude_cmd} ${claude_args} --resume '$session_id' --fork-session"
 else
-  cmd="cd '$new_path' && claude"
+  cmd="cd '$new_path' && ${env_prefix}${claude_cmd} ${claude_args}"
 fi
+cmd="${cmd%% }"
 
 osascript <<EOF
 tell application "iTerm"
