@@ -7,6 +7,25 @@ usage() {
   exit 1
 }
 
+if [ "${1:-}" = "--create-config" ]; then
+  config_dir="$HOME/.config/create_worktree"
+  config_path="$config_dir/config.json"
+  if [ -f "$config_path" ]; then
+    echo "config already exists: $config_path"
+  else
+    mkdir -p "$config_dir"
+    cat > "$config_path" <<'EOF'
+{
+  "command": "claude",
+  "args": [],
+  "env": {}
+}
+EOF
+    echo "created: $config_path"
+  fi
+  exit 0
+fi
+
 [ $# -eq 0 ] || [ $# -gt 2 ] && usage
 
 if [ $# -eq 2 ]; then
