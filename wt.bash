@@ -25,15 +25,24 @@ dir_name="${name//\//-}"
 repo_root=$(git rev-parse --show-toplevel)
 new_path="$(dirname "$repo_root")/$dir_name"
 
-if [ -e "$new_path" ]; then
-  echo "error: '$new_path' already exists" >&2
-  exit 1
+branch_exists=$(git branch --list "$branch")
+
+if [ -n "$branch_exists" ]; then
+  if [ -e "$new_path" ]; then
+    echo "worktree: already exists at $new_path (branch: $branch)"
+  else
+    git worktree add "$new_path" "$branch"
+    echo "worktree: created $new_path from existing branch $branch"
+  fi
+else
+  if [ -e "$new_path" ]; then
+    echo "error: '$new_path' already exists but branch '$branch' does not" >&2
+    exit 1
+  fi
+  git worktree add -b "$branch" "$new_path"
+  git -C "$new_path" branch --unset-upstream 2>/dev/null || true
+  echo "worktree: created $new_path (branch: $branch)"
 fi
-
-git worktree add -b "$branch" "$new_path"
-git -C "$new_path" branch --unset-upstream 2>/dev/null || true
-
-echo "worktree: created $new_path (branch: $branch)"
 
 # ── Claude project setup ─────────────────────────────────────────────────────
 
