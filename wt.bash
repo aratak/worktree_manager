@@ -1,30 +1,62 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+CONFIG_DIR="$HOME/.config/create_worktree"
+CONFIG_PATH="$CONFIG_DIR/config.json"
+
 usage() {
-  echo "Usage: wt <branch-prefix> <name>  →  branch: <prefix>/<name>, dir: ../<name>"
-  echo "       wt <name>                  →  branch: <name>,           dir: ../<name>"
-  exit 1
+  cat <<'EOF'
+Usage:
+  wt <name>                   branch: <name>,          dir: ../<name>
+  wt <prefix> <name>          branch: <prefix>/<name>, dir: ../<name>
+
+  Creates a git worktree, links Claude memory from the current project,
+  forks the current Claude session, and opens a new iTerm2 tab with
+  Claude running in the new worktree.
+
+Options:
+  --create-config   Create default config at ~/.config/create_worktree/config.json
+  --edit-config     Open config in $EDITOR (creates it first if missing)
+  --help            Show this help
+
+Config (~/.config/create_worktree/config.json):
+  command   Claude binary to run (default: "claude")
+  args      Extra arguments passed to claude (default: [])
+  env       Extra environment variables (default: {})
+EOF
+  exit 0
 }
 
-if [ "${1:-}" = "--create-config" ]; then
-  config_dir="$HOME/.config/create_worktree"
-  config_path="$config_dir/config.json"
-  if [ -f "$config_path" ]; then
-    echo "config already exists: $config_path"
-  else
-    mkdir -p "$config_dir"
-    cat > "$config_path" <<'EOF'
+ensure_config() {
+  if [ ! -f "$CONFIG_PATH" ]; then
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_PATH" <<'EOF'
 {
   "command": "claude",
   "args": [],
   "env": {}
 }
 EOF
-    echo "created: $config_path"
+    echo "created: $CONFIG_PATH"
   fi
-  exit 0
-fi
+}
+
+case "${1:-}" in
+  --help) usage ;;
+  --create-config)
+    if [ -f "$CONFIG_PATH" ]; then
+      echo "config already exists: $CONFIG_PATH"
+    else
+      ensure_config
+    fi
+    exit 0
+    ;;
+  --edit-config)
+    ensure_config
+    "${EDITOR:-vi}" "$CONFIG_PATH"
+    exit 0
+    ;;
+esac
 
 [ $# -eq 0 ] || [ $# -gt 2 ] && usage
 
@@ -95,7 +127,7 @@ fi
 
 # ── Config ───────────────────────────────────────────────────────────────────
 
-config_file="$HOME/.config/create_worktree/config.json"
+config_file="$CONFIG_PATH"
 claude_cmd="claude"
 claude_args=""
 claude_env=""
