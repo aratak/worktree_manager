@@ -4,6 +4,13 @@ set -euo pipefail
 CONFIG_DIR="$HOME/.config/create_worktree"
 CONFIG_PATH="$CONFIG_DIR/config.json"
 
+CLAUDE_PROJECTS="$HOME/.claude/projects"
+
+# Encode a filesystem path the way Claude Code names its project dirs.
+encode_path() {
+  echo "$1" | sed 's|^/||; s|/|-|g; s|_|-|g; s|^|-|'
+}
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -13,6 +20,9 @@ Usage:
   Creates a git worktree, links Claude memory from the current project,
   forks the current Claude session, and opens a new iTerm2 tab with
   Claude running in the new worktree.
+
+  wt list                     list worktrees (branch + path)
+  wt remove <name>            remove worktree, its branch, and Claude project dir
 
 Options:
   --create-config   Create default config at ~/.config/create_worktree/config.json
@@ -41,8 +51,77 @@ EOF
   fi
 }
 
+cmd_list() {
+  local cwd
+  cwd=$(git rev-parse --show-toplevel 2>/dev/null || true)
+  git worktree list --porcelain | awk -v cwd="$cwd" '
+    function flush() {
+      if (path == "") return
+      label = branch
+      if (bare)          label = "(bare)"
+      else if (detached) label = "(detached)"
+      mark = (path == cwd) ? "*" : " "
+      printf "%s %-30s %s\n", mark, label, path
+    }
+    /^worktree /  { flush(); path = substr($0, 10); branch = ""; bare = 0; detached = 0 }
+    /^branch /    { branch = $2; sub(/^refs\/heads\//, "", branch) }
+    /^bare$/      { bare = 1 }
+    /^detached$/  { detached = 1 }
+    END { flush() }
+  '
+}
+
+cmd_remove() {
+  local name="${1:-}"
+  [ -n "$name" ] || usage
+
+  local dir_name="${name//\//-}"
+  local repo_root target
+  repo_root=$(git rev-parse --show-toplevel)
+  target="$(dirname "$repo_root")/$dir_name"
+
+  # Resolve the worktree's branch from porcelain output; empty if not a worktree.
+  local branch
+  branch=$(git worktree list --porcelain | awk -v t="$target" '
+    /^worktree / { p = substr($0, 10) }
+    /^branch /   { if (p == t) { b = $2; sub(/^refs\/heads\//, "", b); print b } }
+  ')
+
+  if ! git worktree list --porcelain | grep -qxF "worktree $target"; then
+    echo "error: no worktree at $target" >&2
+    exit 1
+  fi
+
+  if [ "$target" = "$repo_root" ]; then
+    echo "error: refusing to remove the current worktree ($target)" >&2
+    exit 1
+  fi
+
+  if ! git worktree remove "$target"; then
+    echo "hint: worktree has changes; commit/stash them or run: git worktree remove --force '$target'" >&2
+    exit 1
+  fi
+  echo "worktree: removed $target"
+
+  if [ -n "$branch" ]; then
+    if git branch -d "$branch" 2>/dev/null; then
+      echo "branch: deleted $branch"
+    else
+      echo "branch: kept $branch (not fully merged); delete with: git branch -D '$branch'" >&2
+    fi
+  fi
+
+  local project_dir="$CLAUDE_PROJECTS/$(encode_path "$target")"
+  if [ -d "$project_dir" ]; then
+    rm -rf "$project_dir"
+    echo "claude: project dir removed"
+  fi
+}
+
 case "${1:-}" in
   --help) usage ;;
+  list) cmd_list; exit 0 ;;
+  remove|rm) shift; cmd_remove "${1:-}"; exit 0 ;;
   --create-config)
     if [ -f "$CONFIG_PATH" ]; then
       echo "config already exists: $CONFIG_PATH"
@@ -97,11 +176,7 @@ fi
 
 # ── Claude project setup ─────────────────────────────────────────────────────
 
-encode_path() {
-  echo "$1" | sed 's|^/||; s|/|-|g; s|_|-|g; s|^|-|'
-}
-
-claude_projects="$HOME/.claude/projects"
+claude_projects="$CLAUDE_PROJECTS"
 old_encoded=$(encode_path "$repo_root")
 new_encoded=$(encode_path "$new_path")
 
