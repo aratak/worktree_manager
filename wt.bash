@@ -191,13 +191,19 @@ if [ -d "$old_project/memory" ] && [ ! -e "$new_project/memory" ]; then
   echo "claude: memory linked from $old_encoded"
 fi
 
-# Copy current session so fork can find it
+# Copy current session so the fork can find it. Only resume if the copy
+# succeeds — a freshly started session may not be flushed to disk yet, in
+# which case we start clean instead of pointing claude at a missing file.
 session_id="${CLAUDE_CODE_SESSION_ID:-}"
-if [ -n "$session_id" ] && [ -f "$old_project/$session_id.jsonl" ]; then
+fork_ready=false
+if [ -z "$session_id" ]; then
+  echo "claude: no active session to fork (CLAUDE_CODE_SESSION_ID not set)" >&2
+elif [ ! -f "$old_project/$session_id.jsonl" ]; then
+  echo "claude: session $session_id not on disk yet; starting fresh (no fork)" >&2
+else
   cp "$old_project/$session_id.jsonl" "$new_project/$session_id.jsonl"
   echo "claude: session $session_id copied"
-else
-  echo "claude: no active session to fork (CLAUDE_CODE_SESSION_ID not set)" >&2
+  fork_ready=true
 fi
 
 # ── Config ───────────────────────────────────────────────────────────────────
@@ -218,7 +224,7 @@ fi
 env_prefix=""
 [ -n "$claude_env" ] && env_prefix="env $claude_env "
 
-if [ -n "$session_id" ]; then
+if [ "$fork_ready" = true ]; then
   cmd="cd '$new_path' && ${env_prefix}${claude_cmd} ${claude_args} --resume '$session_id' --fork-session"
 else
   cmd="cd '$new_path' && ${env_prefix}${claude_cmd} ${claude_args}"
