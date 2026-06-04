@@ -72,25 +72,55 @@ cmd_list() {
 }
 
 cmd_remove() {
-  local name="${1:-}"
-  [ -n "$name" ] || usage
+  local query="${1:-}"
+  [ -n "$query" ] || usage
 
-  local dir_name="${name//\//-}"
-  local repo_root target
+  local repo_root
   repo_root=$(git rev-parse --show-toplevel)
-  target="$(dirname "$repo_root")/$dir_name"
 
-  # Resolve the worktree's branch from porcelain output; empty if not a worktree.
-  local branch
-  branch=$(git worktree list --porcelain | awk -v t="$target" '
-    /^worktree / { p = substr($0, 10) }
-    /^branch /   { if (p == t) { b = $2; sub(/^refs\/heads\//, "", b); print b } }
+  # If the query resolves to an existing directory, canonicalize it so a
+  # relative path like ../foo can be matched against git's absolute paths.
+  local query_path=""
+  if [ -d "$query" ]; then
+    query_path=$(cd "$query" 2>/dev/null && pwd -P) || query_path=""
+  fi
+
+  # Resolve the query through ordered fallbacks, mirroring what `wt list`
+  # shows: branch name first, then directory basename, then filesystem path.
+  # We can't derive the path from the name (`wt <prefix> <name>` makes branch
+  # <prefix>/<name> but directory ../<name>), so look the worktree up instead.
+  # Only the first tier with a hit is used; ambiguity within it is an error.
+  local match
+  match=$(git worktree list --porcelain | awk -v q="$query" -v qp="$query_path" '
+    function base(s) { sub(/.*\//, "", s); return s }
+    function emit() { if (wt != "") { paths[n] = wt; branches[n] = b; n++ } wt = "" }
+    BEGIN { n = 0; m = 0 }
+    /^worktree / { emit(); wt = substr($0, 10); b = "" }
+    /^branch /   { b = $2; sub(/^refs\/heads\//, "", b) }
+    /^$/         { emit() }
+    END {
+      emit()
+      for (i = 0; i < n; i++) if (branches[i] == q)                       { print paths[i] "\t" branches[i]; m++ }
+      if (m) exit
+      for (i = 0; i < n; i++) if (base(paths[i]) == q)                    { print paths[i] "\t" branches[i]; m++ }
+      if (m) exit
+      for (i = 0; i < n; i++) if (paths[i] == q || (qp != "" && paths[i] == qp)) { print paths[i] "\t" branches[i]; m++ }
+    }
   ')
 
-  if ! git worktree list --porcelain | grep -qxF "worktree $target"; then
-    echo "error: no worktree at $target" >&2
+  if [ -z "$match" ]; then
+    echo "error: no worktree matching '$query' (use a branch, dir name, or path from: wt list)" >&2
     exit 1
   fi
+  if [ "$(printf '%s\n' "$match" | wc -l)" -gt 1 ]; then
+    echo "error: '$query' matches multiple worktrees:" >&2
+    printf '%s\n' "$match" | sed 's/\t/  →  /; s/^/  /' >&2
+    exit 1
+  fi
+
+  local target branch
+  target=${match%%$'\t'*}
+  branch=${match#*$'\t'}
 
   if [ "$target" = "$repo_root" ]; then
     echo "error: refusing to remove the current worktree ($target)" >&2
