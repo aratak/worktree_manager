@@ -234,6 +234,34 @@ else
   cp "$old_project/$session_id.jsonl" "$new_project/$session_id.jsonl"
   echo "claude: session $session_id copied"
   fork_ready=true
+
+  # The forked history still records the old worktree everywhere (cwd fields,
+  # absolute paths inside tool results). Claude's actual cwd is the new path,
+  # but it will happily reach back into the old worktree when it recalls a path
+  # from history. Append one meta turn that tells the resumed session it has
+  # moved, so it operates in the new worktree instead of the source.
+  copied="$new_project/$session_id.jsonl"
+  tail_uuid=$(jq -rs '[.[] | select(.uuid)] | last | .uuid' "$copied")
+  if [ -n "$tail_uuid" ] && [ "$tail_uuid" != "null" ]; then
+    fork_version=$(jq -rs '[.[] | select(.version)] | last | .version // ""' "$copied")
+    fork_slug=$(jq -rs '[.[] | select(.slug)] | last | .slug // ""' "$copied")
+    fork_uuid=$(uuidgen | tr 'A-Z' 'a-z')
+    fork_ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
+    fork_note="This session was forked into a new git worktree by the wt tool. The previous working directory was \"$repo_root\"; you are now in \"$new_path\" on branch \"$branch\". File paths earlier in this history point under the old worktree, but the same files now live under the new path. Work in the current worktree ($new_path) from here on and do not edit files in the old worktree."
+    jq -nc \
+      --arg parent "$tail_uuid" \
+      --arg uuid "$fork_uuid" \
+      --arg ts "$fork_ts" \
+      --arg cwd "$new_path" \
+      --arg sid "$session_id" \
+      --arg ver "$fork_version" \
+      --arg branch "$branch" \
+      --arg slug "$fork_slug" \
+      --arg text "$fork_note" \
+      '{parentUuid:$parent, isSidechain:false, promptId:$uuid, type:"user", message:{role:"user", content:[{type:"text", text:$text}]}, isMeta:true, uuid:$uuid, timestamp:$ts, userType:"external", entrypoint:"cli", cwd:$cwd, sessionId:$sid, version:$ver, gitBranch:$branch, slug:$slug}' \
+      >> "$copied"
+    echo "claude: appended worktree-move note to forked session"
+  fi
 fi
 
 # ── Config ───────────────────────────────────────────────────────────────────
