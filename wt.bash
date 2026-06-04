@@ -18,8 +18,9 @@ Usage:
   wt <prefix> <name>          branch: <prefix>/<name>, dir: ../<name>
 
   Creates a git worktree, links Claude memory from the current project,
-  forks the current Claude session, and opens a new iTerm2 tab with
-  Claude running in the new worktree.
+  forks the current Claude session, and opens a new terminal tab/window
+  with Claude running in the new worktree. The terminal is auto-detected
+  (or set "terminal" in the config); supported terminals are listed below.
 
   wt list                     list worktrees (branch + path)
   wt remove <name>            remove worktree, its branch, and Claude project dir
@@ -33,6 +34,9 @@ Config (~/.config/create_worktree/config.json):
   command   Claude binary to run (default: "claude")
   args      Extra arguments passed to claude (default: [])
   env       Extra environment variables (default: {})
+  terminal  Terminal to open (default: "" = auto-detect). One of:
+            iterm, appleterm, tmux, kitty, wezterm, gnome, konsole,
+            alacritty, warp
 EOF
   exit 0
 }
@@ -44,7 +48,8 @@ ensure_config() {
 {
   "command": "claude",
   "args": [],
-  "env": {}
+  "env": {},
+  "terminal": ""
 }
 EOF
     echo "created: $CONFIG_PATH"
@@ -268,37 +273,141 @@ fi
 
 config_file="$CONFIG_PATH"
 claude_cmd="claude"
-claude_args=""
-claude_env=""
+terminal=""
+declare -a cfg_args=()
+declare -a env_pairs=()
 
 if [ -f "$config_file" ]; then
   claude_cmd=$(jq -r '.command // "claude"' "$config_file")
-  claude_args=$(jq -r '(.args // []) | join(" ")' "$config_file")
-  claude_env=$(jq -r '(.env // {}) | to_entries | map("\(.key)=\(.value)") | join(" ")' "$config_file")
+  terminal=$(jq -r '.terminal // ""' "$config_file")
+  while IFS= read -r a;  do [ -n "$a" ]  && cfg_args+=("$a");   done < <(jq -r '(.args // [])[]' "$config_file")
+  while IFS= read -r kv; do [ -n "$kv" ] && env_pairs+=("$kv"); done < <(jq -r '(.env // {}) | to_entries[] | "\(.key)=\(.value)"' "$config_file")
 fi
 
-# ── Open new iTerm2 tab ───────────────────────────────────────────────────────
+# ── Command to run in the new terminal ───────────────────────────────────────
+# This is the one logical command — "run claude in the new worktree" — that
+# every backend below renders into its own dialect (an AppleScript string, a
+# CLI argv, or a Warp YAML tab config). Keeping it as an argv array lets the
+# CLI backends pass it verbatim and the string backends quote it themselves.
 
-env_prefix=""
-[ -n "$claude_env" ] && env_prefix="env $claude_env "
-
+declare -a RUN_ARGV=()
+[ ${#env_pairs[@]} -gt 0 ] && RUN_ARGV+=(env "${env_pairs[@]}")
+RUN_ARGV+=("$claude_cmd")
+[ ${#cfg_args[@]} -gt 0 ] && RUN_ARGV+=("${cfg_args[@]}")
 if [ "$fork_ready" = true ]; then
-  cmd="cd '$new_path' && ${env_prefix}${claude_cmd} ${claude_args} --resume '$session_id' --fork-session"
-else
-  cmd="cd '$new_path' && ${env_prefix}${claude_cmd} ${claude_args}"
+  RUN_ARGV+=(--resume "$session_id" --fork-session)
 fi
-cmd="${cmd%% }"
 
-osascript <<EOF
+# Single-quote for the shell. Ordinary input stays backslash-free, so the result
+# also survives embedding inside an AppleScript string literal unchanged.
+sq() { printf "'%s'" "${1//\'/\'\\\'\'}"; }
+shell_join() { local out= a; for a in "$@"; do out+="$(sq "$a") "; done; printf '%s' "${out% }"; }
+
+# ── Terminal backends ─────────────────────────────────────────────────────────
+# Each opens a new tab — or a new window, where the terminal has none — in the
+# worktree directory and runs RUN_ARGV there. This is the only platform seam.
+
+open_iterm() {
+  local line="cd $(sq "$new_path") && $(shell_join "${RUN_ARGV[@]}")"
+  osascript <<EOF
 tell application "iTerm"
   activate
   tell current window
     create tab with default profile
     tell current session
-      write text "$cmd"
+      write text "$line"
     end tell
   end tell
 end tell
 EOF
+}
 
-echo "done: opened new tab → $new_path"
+open_appleterm() {
+  # Terminal.app's AppleScript has no reliable "new tab"; do script opens a window.
+  local line="cd $(sq "$new_path") && $(shell_join "${RUN_ARGV[@]}")"
+  osascript <<EOF
+tell application "Terminal"
+  activate
+  do script "$line"
+end tell
+EOF
+}
+
+open_tmux()   { tmux new-window -c "$new_path" "$(shell_join "${RUN_ARGV[@]}")"; }
+open_kitty()  { kitty @ launch --type=tab --cwd "$new_path" "${RUN_ARGV[@]}"; }
+open_wezterm(){ wezterm cli spawn --cwd "$new_path" -- "${RUN_ARGV[@]}"; }
+open_gnome()  { gnome-terminal --tab --working-directory="$new_path" -- "${RUN_ARGV[@]}"; }
+open_konsole(){ konsole --new-tab --workdir "$new_path" -e "${RUN_ARGV[@]}"; }
+open_alacritty() {
+  # Alacritty has no tabs; this opens a new window.
+  alacritty --working-directory "$new_path" -e "${RUN_ARGV[@]}"
+}
+
+open_warp() {
+  # Warp's new-tab URI cannot run a command; the only way to execute on open is
+  # a named Tab Config (YAML) reached via warp://tab_config/<name>.
+  local tab_dir name uri
+  if [ "$(uname -s)" = "Darwin" ]; then
+    tab_dir="$HOME/.warp/tab_configs"
+  else
+    tab_dir="${XDG_DATA_HOME:-$HOME/.local/share}/warp-terminal/tab_configs"
+  fi
+  mkdir -p "$tab_dir"
+  name="wt-$dir_name"
+  cat > "$tab_dir/$name.yaml" <<EOF
+---
+name: "$name"
+directory: "$new_path"
+commands:
+  - "$(shell_join "${RUN_ARGV[@]}")"
+EOF
+  uri="warp://tab_config/$name"
+  if [ "$(uname -s)" = "Darwin" ]; then open "$uri"; else xdg-open "$uri"; fi
+}
+
+# ── Pick and open the terminal ────────────────────────────────────────────────
+
+detect_terminal() {
+  [ -n "${TMUX:-}" ] && { echo tmux; return; }
+  case "${TERM_PROGRAM:-}" in
+    iTerm.app)      echo iterm;     return ;;
+    Apple_Terminal) echo appleterm; return ;;
+    WarpTerminal)   echo warp;      return ;;
+    WezTerm)        echo wezterm;   return ;;
+  esac
+  [ -n "${KITTY_WINDOW_ID:-}" ] && { echo kitty;   return; }
+  [ -n "${WEZTERM_PANE:-}" ]    && { echo wezterm; return; }
+  [ -n "${KONSOLE_VERSION:-}" ] && { echo konsole; return; }
+  { [ -n "${GNOME_TERMINAL_SCREEN:-}" ] || [ -n "${GNOME_TERMINAL_SERVICE:-}" ]; } && { echo gnome;     return; }
+  { [ -n "${ALACRITTY_SOCKET:-}" ]      || [ -n "${ALACRITTY_WINDOW_ID:-}" ];     } && { echo alacritty; return; }
+  echo ""
+}
+
+[ -z "$terminal" ] && terminal=$(detect_terminal)
+if [ -z "$terminal" ]; then
+  echo "error: could not detect your terminal. Set \"terminal\" in $CONFIG_PATH" >&2
+  echo "       (one of: iterm, appleterm, tmux, kitty, wezterm, gnome, konsole, alacritty, warp)" >&2
+  exit 1
+fi
+
+if [ "$(uname -s)" = "Linux" ] && [ "$terminal" != tmux ] \
+   && [ -z "${DISPLAY:-}" ] && [ -z "${WAYLAND_DISPLAY:-}" ]; then
+  echo "error: no graphical display; only the tmux backend works headless." >&2
+  echo "       Run inside tmux or set \"terminal\": \"tmux\" in $CONFIG_PATH." >&2
+  exit 1
+fi
+
+case "$terminal" in
+  iterm)     open_iterm ;;
+  appleterm) open_appleterm ;;
+  tmux)      open_tmux ;;
+  kitty)     open_kitty ;;
+  wezterm)   open_wezterm ;;
+  gnome)     open_gnome ;;
+  konsole)   open_konsole ;;
+  alacritty) open_alacritty ;;
+  warp)      open_warp ;;
+  *) echo "error: unknown terminal '$terminal' (set a valid \"terminal\" in $CONFIG_PATH)" >&2; exit 1 ;;
+esac
+
+echo "done: opened $terminal → $new_path"
