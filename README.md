@@ -1,6 +1,6 @@
 # wt — git worktrees with Claude Code session forking
 
-`wt` creates a git worktree for a branch, symlinks your current project's Claude Code memory into it, forks the Claude Code session you're running from, and opens a new terminal tab (or window) with `claude` already running in the new worktree. The result: a second branch with a fully-seeded Claude session, started with one command.
+`wt` creates a git worktree for a branch, forks the Claude Code session you're running from, and opens a new terminal tab (or window) with `claude` already running in the new worktree. The result: a second branch with a fully-seeded Claude session, started with one command.
 
 ## Why
 
@@ -81,7 +81,7 @@ Auto-detection inspects terminal-specific environment variables (`TERM_PROGRAM`,
 
 ## How it works
 
-- **Memory symlink** — the source worktree's Claude memory at `~/.claude/projects/<encoded>/memory` is symlinked into the new worktree's project dir, so both share the same memory files.
+- **Memory** — nothing to do: Claude Code shares its auto-memory across all worktrees of the same repository natively, so the new worktree sees the same memory as the source.
 - **Session fork** — `wt` copies the current session's `<session>.jsonl` into the new worktree's project dir and appends one `isMeta` turn that tells the resumed session it moved: the working directory changed from the old worktree to the new one, and it should operate in the new path from then on. `claude` is launched with `--resume <session> --fork-session`.
 
 ## ⚠️ Claude Code compatibility

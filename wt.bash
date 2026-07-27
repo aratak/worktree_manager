@@ -17,10 +17,10 @@ Usage:
   wt <name>                   branch: <name>,          dir: ../<name>
   wt <prefix> <name>          branch: <prefix>/<name>, dir: ../<name>
 
-  Creates a git worktree, links Claude memory from the current project,
-  forks the current Claude session, and opens a new terminal tab/window
-  with Claude running in the new worktree. The terminal is auto-detected
-  (or set "terminal" in the config); supported terminals are listed below.
+  Creates a git worktree, forks the current Claude session, and opens a
+  new terminal tab/window with Claude running in the new worktree. The
+  terminal is auto-detected (or set "terminal" in the config); supported
+  terminals are listed below.
 
   wt list                     list worktrees (branch + path)
   wt remove <name>            remove worktree, its branch, and Claude project dir
@@ -218,14 +218,6 @@ new_encoded=$(encode_path "$new_path")
 old_project="$claude_projects/$old_encoded"
 new_project="$claude_projects/$new_encoded"
 
-mkdir -p "$new_project"
-
-# Share memory between worktrees
-if [ -d "$old_project/memory" ] && [ ! -e "$new_project/memory" ]; then
-  ln -s "$old_project/memory" "$new_project/memory"
-  echo "claude: memory linked from $old_encoded"
-fi
-
 # Copy current session so the fork can find it. Only resume if the copy
 # succeeds — a freshly started session may not be flushed to disk yet, in
 # which case we start clean instead of pointing claude at a missing file.
@@ -236,6 +228,7 @@ if [ -z "$session_id" ]; then
 elif [ ! -f "$old_project/$session_id.jsonl" ]; then
   echo "claude: session $session_id not on disk yet; starting fresh (no fork)" >&2
 else
+  mkdir -p "$new_project"
   cp "$old_project/$session_id.jsonl" "$new_project/$session_id.jsonl"
   echo "claude: session $session_id copied"
   fork_ready=true
