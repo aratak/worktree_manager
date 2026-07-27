@@ -36,6 +36,7 @@ Configuration lives in `~/.config/create_worktree/`.
 | --- | --- | --- |
 | `wt <name>` | Branch `<name>`, worktree dir `../<name>`. | `wt fix-login` → branch `fix-login`, dir `../fix-login` |
 | `wt <prefix> <name>` | Branch `<prefix>/<name>`, worktree dir `../<name>`. | `wt PR-26341 fix-login` → branch `PR-26341/fix-login`, dir `../fix-login` |
+| `wt … -- <command…>` | Same, but the new tab runs `<command…>` instead of the configured claude command. | `wt dev -- cloudclaude --scope demo --agent developer` |
 | `wt list` | List worktrees (branch + path); marks the current one with `*`. | `wt list` |
 | `wt remove <name>` / `wt rm <name>` | Remove the worktree, delete its branch, and remove its Claude project dir. Resolves `<name>` by branch, dir basename, or path. | `wt rm fix-login` |
 | `wt --help` | Show help. | `wt --help` |
@@ -57,9 +58,9 @@ Path: `~/.config/create_worktree/config.json`. Default:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `command` | `"claude"` | The Claude binary to run in the new terminal. |
-| `args` | `[]` | Extra arguments passed to `claude`. |
-| `env` | `{}` | Extra environment variables for the launched command. |
+| `command` | `"claude"` | The Claude binary to run in the new terminal. Ignored when `-- <command…>` is given. |
+| `args` | `[]` | Extra arguments passed to `claude`. Ignored when `-- <command…>` is given. |
+| `env` | `{}` | Extra environment variables for the launched command — applied to `-- <command…>` too. |
 | `terminal` | `""` | Which terminal backend to open. `""` means auto-detect; set it explicitly to override detection. |
 
 ## Supported terminals
@@ -81,7 +82,7 @@ Auto-detection inspects terminal-specific environment variables (`TERM_PROGRAM`,
 ## How it works
 
 - **Worktree** — `git worktree add` for the branch, created as a sibling directory of the repo root.
-- **Claude session** — a fresh `claude` is launched in the new worktree; no state is copied. Project context comes along anyway: Claude Code shares its auto-memory across all worktrees of the same repository, and `CLAUDE.md` is part of the checkout.
+- **Claude session** — a fresh `claude` (or whatever follows `--`) is launched in the new worktree; no state is copied. Project context comes along anyway: Claude Code shares its auto-memory across all worktrees of the same repository, and `CLAUDE.md` is part of the checkout.
 - **Cleanup** — `wt remove` deletes the worktree, its branch, and the worktree's `~/.claude/projects` dir, so removed worktrees don't leave stale session transcripts behind.
 
 ## ⚠️ Claude Code compatibility

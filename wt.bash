@@ -16,11 +16,13 @@ usage() {
 Usage:
   wt <name>                   branch: <name>,          dir: ../<name>
   wt <prefix> <name>          branch: <prefix>/<name>, dir: ../<name>
+  wt … -- <command…>          run <command…> in the new tab instead of claude
 
-  Creates a git worktree and opens a new terminal tab/window with a
-  fresh Claude session running in the new worktree. The terminal is
-  auto-detected (or set "terminal" in the config); supported terminals
-  are listed below.
+  Creates a git worktree and opens a new terminal tab/window in it. By
+  default the tab runs a fresh Claude session (the configured command
+  and args); everything after -- replaces that command entirely (env
+  from the config still applies). The terminal is auto-detected (or set
+  "terminal" in the config); supported terminals are listed below.
 
   wt list                     list worktrees (branch + path)
   wt remove <name>            remove worktree, its branch, and Claude project dir
@@ -32,7 +34,8 @@ Options:
 
 Config (~/.config/create_worktree/config.json):
   command   Claude binary to run (default: "claude")
-  args      Extra arguments passed to claude (default: [])
+  args      Extra arguments passed to claude (default: []);
+            command and args are ignored when -- <command…> is given
   env       Extra environment variables (default: {})
   terminal  Terminal to open (default: "" = auto-detect). One of:
             iterm, appleterm, tmux, kitty, wezterm, gnome, konsole,
@@ -172,14 +175,32 @@ case "${1:-}" in
     ;;
 esac
 
-[ $# -eq 0 ] || [ $# -gt 2 ] && usage
+# Split argv at the first "--": positionals before it, the tab command after.
+declare -a positional=()
+declare -a tab_cmd=()
+seen_ddash=false
+for arg in "$@"; do
+  if [ "$seen_ddash" = true ]; then
+    tab_cmd+=("$arg")
+  elif [ "$arg" = "--" ]; then
+    seen_ddash=true
+  else
+    positional+=("$arg")
+  fi
+done
 
-if [ $# -eq 2 ]; then
-  branch="$1/$2"
-  name="$2"
+[ ${#positional[@]} -eq 0 ] || [ ${#positional[@]} -gt 2 ] && usage
+if [ "$seen_ddash" = true ] && [ ${#tab_cmd[@]} -eq 0 ]; then
+  echo "error: '--' given but no command follows it" >&2
+  exit 1
+fi
+
+if [ ${#positional[@]} -eq 2 ]; then
+  branch="${positional[0]}/${positional[1]}"
+  name="${positional[1]}"
 else
-  branch="$1"
-  name="$1"
+  branch="${positional[0]}"
+  name="${positional[0]}"
 fi
 
 # Sanitize name for directory (replace / with -)
@@ -225,15 +246,19 @@ if [ -f "$config_file" ]; then
 fi
 
 # ── Command to run in the new terminal ───────────────────────────────────────
-# This is the one logical command — "run claude in the new worktree" — that
+# This is the one logical command — "run the session in the new worktree" — that
 # every backend below renders into its own dialect (an AppleScript string, a
 # CLI argv, or a Warp YAML tab config). Keeping it as an argv array lets the
 # CLI backends pass it verbatim and the string backends quote it themselves.
 
 declare -a RUN_ARGV=()
 [ ${#env_pairs[@]} -gt 0 ] && RUN_ARGV+=(env "${env_pairs[@]}")
-RUN_ARGV+=("$claude_cmd")
-[ ${#cfg_args[@]} -gt 0 ] && RUN_ARGV+=("${cfg_args[@]}")
+if [ ${#tab_cmd[@]} -gt 0 ]; then
+  RUN_ARGV+=("${tab_cmd[@]}")
+else
+  RUN_ARGV+=("$claude_cmd")
+  [ ${#cfg_args[@]} -gt 0 ] && RUN_ARGV+=("${cfg_args[@]}")
+fi
 
 # Single-quote for the shell. Ordinary input stays backslash-free, so the result
 # also survives embedding inside an AppleScript string literal unchanged.
