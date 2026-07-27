@@ -21,7 +21,7 @@ shellcheck wt.bash     # lint (not run in CI, so run it yourself)
 
 ## Adding a terminal backend
 
-This is the most likely contribution. The launch layer is the only platform-specific seam — everything else (git, memory link, session fork) is terminal-agnostic. Steps:
+This is the most likely contribution. The launch layer is the only platform-specific seam — everything else is terminal-agnostic. Steps:
 
 1. **Write `open_<name>()`** taking the worktree dir (`$new_path`) and the `RUN_ARGV` array.
 2. **Render `RUN_ARGV` in your terminal's dialect.** There are three existing shapes to copy:
@@ -34,4 +34,4 @@ This is the most likely contribution. The launch layer is the only platform-spec
 
 ## A note on the Claude Code coupling
 
-The session fork depends on Claude Code's internal session format, which is undocumented and can change without notice. This fragility is intentional and accepted — see the compatibility note in the README. PRs that make forking more robust against format changes are welcome, as long as they keep the single-file shape.
+The `wt remove` cleanup depends on Claude Code's internal project-dir naming under `~/.claude/projects`, which is undocumented and can change without notice. This fragility is intentional and accepted — see the compatibility note in the README.

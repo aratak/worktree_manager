@@ -17,10 +17,10 @@ Usage:
   wt <name>                   branch: <name>,          dir: ../<name>
   wt <prefix> <name>          branch: <prefix>/<name>, dir: ../<name>
 
-  Creates a git worktree, forks the current Claude session, and opens a
-  new terminal tab/window with Claude running in the new worktree. The
-  terminal is auto-detected (or set "terminal" in the config); supported
-  terminals are listed below.
+  Creates a git worktree and opens a new terminal tab/window with a
+  fresh Claude session running in the new worktree. The terminal is
+  auto-detected (or set "terminal" in the config); supported terminals
+  are listed below.
 
   wt list                     list worktrees (branch + path)
   wt remove <name>            remove worktree, its branch, and Claude project dir
@@ -209,59 +209,6 @@ else
   echo "worktree: created $new_path (branch: $branch)"
 fi
 
-# ── Claude project setup ─────────────────────────────────────────────────────
-
-claude_projects="$CLAUDE_PROJECTS"
-old_encoded=$(encode_path "$repo_root")
-new_encoded=$(encode_path "$new_path")
-
-old_project="$claude_projects/$old_encoded"
-new_project="$claude_projects/$new_encoded"
-
-# Copy current session so the fork can find it. Only resume if the copy
-# succeeds — a freshly started session may not be flushed to disk yet, in
-# which case we start clean instead of pointing claude at a missing file.
-session_id="${CLAUDE_CODE_SESSION_ID:-}"
-fork_ready=false
-if [ -z "$session_id" ]; then
-  echo "claude: no active session to fork (CLAUDE_CODE_SESSION_ID not set)" >&2
-elif [ ! -f "$old_project/$session_id.jsonl" ]; then
-  echo "claude: session $session_id not on disk yet; starting fresh (no fork)" >&2
-else
-  mkdir -p "$new_project"
-  cp "$old_project/$session_id.jsonl" "$new_project/$session_id.jsonl"
-  echo "claude: session $session_id copied"
-  fork_ready=true
-
-  # The forked history still records the old worktree everywhere (cwd fields,
-  # absolute paths inside tool results). Claude's actual cwd is the new path,
-  # but it will happily reach back into the old worktree when it recalls a path
-  # from history. Append one meta turn that tells the resumed session it has
-  # moved, so it operates in the new worktree instead of the source.
-  copied="$new_project/$session_id.jsonl"
-  tail_uuid=$(jq -rs '[.[] | select(.uuid)] | last | .uuid' "$copied")
-  if [ -n "$tail_uuid" ] && [ "$tail_uuid" != "null" ]; then
-    fork_version=$(jq -rs '[.[] | select(.version)] | last | .version // ""' "$copied")
-    fork_slug=$(jq -rs '[.[] | select(.slug)] | last | .slug // ""' "$copied")
-    fork_uuid=$(uuidgen | tr 'A-Z' 'a-z')
-    fork_ts=$(date -u +%Y-%m-%dT%H:%M:%S.000Z)
-    fork_note="This session was forked into a new git worktree by the wt tool. The previous working directory was \"$repo_root\"; you are now in \"$new_path\" on branch \"$branch\". File paths earlier in this history point under the old worktree, but the same files now live under the new path. Work in the current worktree ($new_path) from here on and do not edit files in the old worktree."
-    jq -nc \
-      --arg parent "$tail_uuid" \
-      --arg uuid "$fork_uuid" \
-      --arg ts "$fork_ts" \
-      --arg cwd "$new_path" \
-      --arg sid "$session_id" \
-      --arg ver "$fork_version" \
-      --arg branch "$branch" \
-      --arg slug "$fork_slug" \
-      --arg text "$fork_note" \
-      '{parentUuid:$parent, isSidechain:false, promptId:$uuid, type:"user", message:{role:"user", content:[{type:"text", text:$text}]}, isMeta:true, uuid:$uuid, timestamp:$ts, userType:"external", entrypoint:"cli", cwd:$cwd, sessionId:$sid, version:$ver, gitBranch:$branch, slug:$slug}' \
-      >> "$copied"
-    echo "claude: appended worktree-move note to forked session"
-  fi
-fi
-
 # ── Config ───────────────────────────────────────────────────────────────────
 
 config_file="$CONFIG_PATH"
@@ -287,9 +234,6 @@ declare -a RUN_ARGV=()
 [ ${#env_pairs[@]} -gt 0 ] && RUN_ARGV+=(env "${env_pairs[@]}")
 RUN_ARGV+=("$claude_cmd")
 [ ${#cfg_args[@]} -gt 0 ] && RUN_ARGV+=("${cfg_args[@]}")
-if [ "$fork_ready" = true ]; then
-  RUN_ARGV+=(--resume "$session_id" --fork-session)
-fi
 
 # Single-quote for the shell. Ordinary input stays backslash-free, so the result
 # also survives embedding inside an AppleScript string literal unchanged.

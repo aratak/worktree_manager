@@ -1,18 +1,17 @@
-# wt — git worktrees with Claude Code session forking
+# wt — git worktrees with Claude Code
 
-`wt` creates a git worktree for a branch, forks the Claude Code session you're running from, and opens a new terminal tab (or window) with `claude` already running in the new worktree. The result: a second branch with a fully-seeded Claude session, started with one command.
+`wt` creates a git worktree for a branch and opens a new terminal tab (or window) with a fresh `claude` session already running in the new worktree. The result: a second branch ready to work on, started with one command.
 
 ## Why
 
-When you're deep in a Claude Code conversation and need to start work on another branch, switching worktrees the normal way means a fresh session that knows nothing about what you were doing. `wt` lets you spin up parallel work on a new branch without losing the current conversation and context — the new session is forked from the one you're in, so it carries the history forward.
+When you need to start work on another branch without disturbing what's running in the current one, doing it by hand means creating a worktree, opening a terminal, cd-ing there, and starting `claude`. `wt` does all of that in one command. The new session starts clean, but it isn't amnesiac about the project: Claude Code shares its auto-memory across all worktrees of the same repository, and `CLAUDE.md` comes with the checkout.
 
 ## Requirements
 
 - **bash**, **git**, **jq** — `jq` is the only non-ubiquitous dependency; install it from your package manager.
-- `uuidgen`, `date`, `sed`, `awk` — standard on macOS and Linux.
+- `sed`, `awk` — standard on macOS and Linux.
 - A supported terminal (see [Supported terminals](#supported-terminals)).
 - macOS or Linux.
-- **Must be run from inside a Claude Code session** for the fork to happen — `wt` reads `CLAUDE_CODE_SESSION_ID`. Without it, the worktree is still created, but no session is forked.
 
 ## Install
 
@@ -81,12 +80,13 @@ Auto-detection inspects terminal-specific environment variables (`TERM_PROGRAM`,
 
 ## How it works
 
-- **Memory** — nothing to do: Claude Code shares its auto-memory across all worktrees of the same repository natively, so the new worktree sees the same memory as the source.
-- **Session fork** — `wt` copies the current session's `<session>.jsonl` into the new worktree's project dir and appends one `isMeta` turn that tells the resumed session it moved: the working directory changed from the old worktree to the new one, and it should operate in the new path from then on. `claude` is launched with `--resume <session> --fork-session`.
+- **Worktree** — `git worktree add` for the branch, created as a sibling directory of the repo root.
+- **Claude session** — a fresh `claude` is launched in the new worktree; no state is copied. Project context comes along anyway: Claude Code shares its auto-memory across all worktrees of the same repository, and `CLAUDE.md` is part of the checkout.
+- **Cleanup** — `wt remove` deletes the worktree, its branch, and the worktree's `~/.claude/projects` dir, so removed worktrees don't leave stale session transcripts behind.
 
 ## ⚠️ Claude Code compatibility
 
-The session fork relies on Claude Code's **internal, undocumented** session format: the `~/.claude/projects` directory layout, the path-encoding scheme that names project dirs, and the `.jsonl` record schema (fields like `parentUuid`, `isMeta`, `cwd`, `sessionId`, `version`, …). None of this is a public API — Anthropic can change it at any time. If forking breaks after a Claude Code update, that's almost certainly why. Worktree creation, `wt list`, and `wt remove` don't touch any of this and are unaffected.
+The `wt remove` cleanup relies on the path-encoding scheme that names dirs under `~/.claude/projects`, which is Claude Code **internal and undocumented** — Anthropic can change it at any time. If the cleanup stops finding the dir after a Claude Code update, that's why. Everything else `wt` does is plain git and terminal automation.
 
 ## Troubleshooting
 
