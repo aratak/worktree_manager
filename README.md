@@ -46,6 +46,7 @@ Configuration lives in `~/.config/create_worktree/`.
 | `wt close --tab <uid>` | Close that one tab. | `wt close --tab wt-a1b2` |
 | `wt remove <name>` / `wt rm <name>` | Close `wt`'s tabs there, then remove the worktree, delete its branch, and remove its Claude project dir. Resolves `<name>` by branch, dir basename, or path. | `wt rm fix-login` |
 | `wt rm --keep-tabs <name>` | Same, but leaves the tabs running — and stops tracking them, since the worktree they were opened for is gone. | `wt rm --keep-tabs fix-login` |
+| `wt createskill` | Write a Claude Code skill for `wt` to `~/.claude/skills/wt/SKILL.md`, so a session knows how to drive it without being told. Overwrites on every run. | `wt createskill` |
 | `wt --help` | Show help. | `wt --help` |
 | `wt --create-config` | Create the default config if it doesn't exist. | `wt --create-config` |
 | `wt --edit-config` | Open the config in `$EDITOR` (creating it first if missing). | `wt --edit-config` |

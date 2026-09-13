@@ -8,6 +8,7 @@ LOCK_DIR="$CONFIG_DIR/tabs.lock"
 EMPTY_REGISTRY='{"v":1,"tabs":{}}'
 
 CLAUDE_PROJECTS="$HOME/.claude/projects"
+CLAUDE_SKILLS="$HOME/.claude/skills"
 
 # Encode a filesystem path the way Claude Code names its project dirs.
 encode_path() {
@@ -49,6 +50,7 @@ Usage:
   wt remove | wt rm <name>    close our tabs there, then remove the worktree,
                               its branch, and the Claude project dir
   wt rm --keep-tabs <name>    remove the worktree, leave the tabs running
+  wt createskill              write the wt skill for Claude Code, then exit
 
 Options:
   --create-config   Create default config at ~/.config/create_worktree/config.json
@@ -782,12 +784,97 @@ cmd_remove() {
   fi
 }
 
+# Teach Claude Code the tool. The skill is generated rather than kept as a file
+# in the repo for the same reason wt is one script: there is exactly one place
+# to change. Its command reference is usage() verbatim, so the two cannot drift.
+cmd_createskill() {
+  local dir="$CLAUDE_SKILLS/wt" reference
+  reference=$(usage)
+  mkdir -p "$dir"
+  {
+    cat <<'EOF'
+---
+name: wt
+description: Use when working with git worktrees through the `wt` command — making a worktree for a branch, opening or focusing its terminal tab, listing worktrees and their tabs, or tearing one down with `wt close` / `wt remove`. Also read it before removing a worktree by hand, which is the operation wt exists to make safe.
+argument-hint: "[<prefix>] <name>"
+---
+
+# wt
+
+`wt` makes a git worktree for a branch and opens a terminal tab in it with a
+fresh Claude session already running. It replaces the four-step manual version:
+`git worktree add`, open a terminal, `cd`, start `claude`.
+
+Run it from inside the repository. The new worktree is a sibling directory of
+the repo root.
+
+## What to reach for
+
+| Goal | Command |
+| --- | --- |
+| Start work on another branch, leaving this one alone | `wt <prefix> <name>` |
+| Go back to a worktree you already made | `wt <prefix>/<name>` |
+| Just the directory, no tab | `wt --create <prefix> <name>` |
+| Run something other than claude in the tab | `wt <name> -- <command…>` |
+| See what exists | `wt ls`, or `wt ls --json` to parse |
+| Close the tabs but keep the worktree | `wt close <name>` |
+| Done with it entirely | `wt rm <name>` |
+
+## The model, in three rules
+
+1. **The branch is the handle.** The directory cannot be derived from the
+   arguments — `wt PR-1 fix` makes branch `PR-1/fix` in `../fix` — so wt looks
+   the worktree up by branch. That is why `wt PR-1/fix` returns to the worktree
+   `wt PR-1 fix` created instead of making a second one.
+2. **wt owns only the tabs it opened.** A tab you opened by hand in a worktree
+   is invisible to wt: it is never listed, never focused, never closed. Tabs wt
+   opened get a uid like `wt-a1b2`, printed when they open and shown by `wt ls`.
+3. **The registry says what is ours, the terminal says what is alive.** The uids
+   live in `~/.config/create_worktree/tabs.json`, but that file is never trusted
+   for liveness — every read checks it against the running terminal, so a tab
+   closed by hand or a restarted terminal self-heal. Never hand-edit it.
+
+## Things that will bite you
+
+- `wt <name>` on a worktree that already has one of our tabs **focuses that
+  tab** and opens nothing. Pass `--new-tab` when you actually want a second one.
+- With several tabs there wt refuses, lists them, and exits 1 asking for
+  `--tab <uid>` or `--new-tab`. That is a prompt for a decision, not a failure
+  to retry.
+- Exit codes: **1** nothing matched the query, **2** that tab's terminal backend
+  cannot close or focus tabs.
+- Only the iTerm backend tracks tabs. On every other terminal wt opens the tab
+  and forgets it, so `wt close` finds nothing and `wt ls` nests nothing —
+  `wt remove` still removes the worktree.
+- **Do not `git worktree remove` a wt worktree by hand while a session runs in
+  it.** That session does not crash; it silently keeps writing to a path that no
+  longer exists. `wt rm` closes the tabs first, which is the whole point.
+- `wt rm` also deletes the branch and the worktree's `~/.claude/projects` dir.
+  Use `wt close` when you want the worktree to survive.
+- `wt ls` costs about a second when tabs are registered (it asks iTerm) and is
+  instant when none are. Do not poll it in a loop.
+
+## Command reference
+
+Verbatim from `wt --help`:
+
+```
+EOF
+    printf '%s\n' "$reference"
+    cat <<'EOF'
+```
+EOF
+  } > "$dir/SKILL.md"
+  echo "skill: wrote $dir/SKILL.md"
+}
+
 # ── Dispatch ──────────────────────────────────────────────────────────────────
 
 case "${1:-}" in
   --help) usage ;;
   list|ls) shift; cmd_list "$@"; exit 0 ;;
   close) shift; cmd_close "$@"; exit 0 ;;
+  createskill) cmd_createskill; exit 0 ;;
   remove|rm) shift; cmd_remove "$@"; exit 0 ;;
   --create-config)
     if [ -f "$CONFIG_PATH" ]; then
