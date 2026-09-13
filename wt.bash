@@ -24,8 +24,8 @@ Usage:
   from the config still applies). The terminal is auto-detected (or set
   "terminal" in the config); supported terminals are listed below.
 
-  wt list                     list worktrees (branch + path)
-  wt remove <name>            remove worktree, its branch, and Claude project dir
+  wt list | wt ls             list worktrees (branch + path)
+  wt remove | wt rm <name>    remove worktree, its branch, and Claude project dir
 
 Options:
   --create-config   Create default config at ~/.config/create_worktree/config.json
@@ -158,7 +158,7 @@ cmd_remove() {
 
 case "${1:-}" in
   --help) usage ;;
-  list) cmd_list; exit 0 ;;
+  list|ls) cmd_list; exit 0 ;;
   remove|rm) shift; cmd_remove "${1:-}"; exit 0 ;;
   --create-config)
     if [ -f "$CONFIG_PATH" ]; then

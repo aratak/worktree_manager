@@ -37,7 +37,7 @@ Configuration lives in `~/.config/create_worktree/`.
 | `wt <name>` | Branch `<name>`, worktree dir `../<name>`. | `wt fix-login` → branch `fix-login`, dir `../fix-login` |
 | `wt <prefix> <name>` | Branch `<prefix>/<name>`, worktree dir `../<name>`. | `wt PR-26341 fix-login` → branch `PR-26341/fix-login`, dir `../fix-login` |
 | `wt … -- <command…>` | Same, but the new tab runs `<command…>` instead of the configured claude command. | `wt dev -- cloudclaude --scope demo --agent developer` |
-| `wt list` | List worktrees (branch + path); marks the current one with `*`. | `wt list` |
+| `wt list` / `wt ls` | List worktrees (branch + path); marks the current one with `*`. | `wt ls` |
 | `wt remove <name>` / `wt rm <name>` | Remove the worktree, delete its branch, and remove its Claude project dir. Resolves `<name>` by branch, dir basename, or path. | `wt rm fix-login` |
 | `wt --help` | Show help. | `wt --help` |
 | `wt --create-config` | Create the default config if it doesn't exist. | `wt --create-config` |
