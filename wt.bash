@@ -16,12 +16,16 @@ usage() {
 Usage:
   wt <name>                   branch: <name>,          dir: ../<name>
   wt <prefix> <name>          branch: <prefix>/<name>, dir: ../<name>
+  wt <prefix>/<name>          same branch as the two-argument form
   wt … -- <command…>          run <command…> in the new tab instead of claude
+  wt --create …               create the worktree only, open no tab
 
-  Creates a git worktree and opens a new terminal tab/window in it. By
-  default the tab runs a fresh Claude session (the configured command
-  and args); everything after -- replaces that command entirely (env
-  from the config still applies). The terminal is auto-detected (or set
+  Creates a git worktree and opens a new terminal tab/window in it. When the
+  branch is already checked out somewhere, that worktree is reused and only
+  the tab opens, so re-running wt on an existing worktree takes you back to
+  it. By default the tab runs a fresh Claude session (the configured command
+  and args); everything after -- replaces that command entirely (env from
+  the config still applies). The terminal is auto-detected (or set
   "terminal" in the config); supported terminals are listed below.
 
   wt list | wt ls             list worktrees (branch + path)
@@ -76,6 +80,17 @@ cmd_list() {
     /^bare$/      { bare = 1 }
     /^detached$/  { detached = 1 }
     END { flush() }
+  '
+}
+
+# Directory of the worktree checked out on <branch>, empty if none. The branch
+# is the only stable handle we have: the directory cannot be derived from the
+# arguments, since `wt <prefix> <name>` puts branch <prefix>/<name> in ../<name>
+# while `wt <prefix>/<name>` would compute ../<prefix>-<name>.
+worktree_for_branch() {
+  git worktree list --porcelain | awk -v want="$1" '
+    /^worktree / { path = substr($0, 10) }
+    /^branch /   { b = $2; sub(/^refs\/heads\//, "", b); if (b == want) { print path; exit } }
   '
 }
 
@@ -179,11 +194,14 @@ esac
 declare -a positional=()
 declare -a tab_cmd=()
 seen_ddash=false
+create_only=false
 for arg in "$@"; do
   if [ "$seen_ddash" = true ]; then
     tab_cmd+=("$arg")
   elif [ "$arg" = "--" ]; then
     seen_ddash=true
+  elif [ "$arg" = "--create" ]; then
+    create_only=true
   else
     positional+=("$arg")
   fi
@@ -192,6 +210,10 @@ done
 [ ${#positional[@]} -eq 0 ] || [ ${#positional[@]} -gt 2 ] && usage
 if [ "$seen_ddash" = true ] && [ ${#tab_cmd[@]} -eq 0 ]; then
   echo "error: '--' given but no command follows it" >&2
+  exit 1
+fi
+if [ "$create_only" = true ] && [ "$seen_ddash" = true ]; then
+  echo "error: --create opens no tab, so there is nowhere to run '-- <command…>'" >&2
   exit 1
 fi
 
@@ -209,25 +231,34 @@ dir_name="${name//\//-}"
 # ── Git ──────────────────────────────────────────────────────────────────────
 
 repo_root=$(git rev-parse --show-toplevel)
-new_path="$(dirname "$repo_root")/$dir_name"
 
-branch_exists=$(git branch --list "$branch")
+# Reuse the worktree the branch already lives in rather than computing a
+# directory for it. Both argument forms name the same branch, so this is what
+# makes `wt <prefix>/<name>` land on the worktree `wt <prefix> <name>` made
+# instead of asking git for a second checkout of a branch it already has.
+existing=$(worktree_for_branch "$branch")
 
-if [ -n "$branch_exists" ]; then
-  if [ -e "$new_path" ]; then
-    echo "worktree: already exists at $new_path (branch: $branch)"
-  else
-    git worktree add "$new_path" "$branch"
-    echo "worktree: created $new_path from existing branch $branch"
-  fi
+if [ -n "$existing" ]; then
+  new_path="$existing"
+  echo "worktree: exists at $new_path (branch: $branch)"
 else
+  new_path="$(dirname "$repo_root")/$dir_name"
   if [ -e "$new_path" ]; then
-    echo "error: '$new_path' already exists but branch '$branch' does not" >&2
+    echo "error: '$new_path' already exists but holds no worktree for branch '$branch'" >&2
     exit 1
   fi
-  git worktree add -b "$branch" "$new_path"
-  git -C "$new_path" branch --unset-upstream 2>/dev/null || true
-  echo "worktree: created $new_path (branch: $branch)"
+  if [ -n "$(git branch --list "$branch")" ]; then
+    git worktree add "$new_path" "$branch"
+    echo "worktree: created $new_path from existing branch $branch"
+  else
+    git worktree add -b "$branch" "$new_path"
+    git -C "$new_path" branch --unset-upstream 2>/dev/null || true
+    echo "worktree: created $new_path (branch: $branch)"
+  fi
+fi
+
+if [ "$create_only" = true ]; then
+  exit 0
 fi
 
 # ── Config ───────────────────────────────────────────────────────────────────
