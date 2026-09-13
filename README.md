@@ -36,7 +36,9 @@ Configuration lives in `~/.config/create_worktree/`.
 | --- | --- | --- |
 | `wt <name>` | Branch `<name>`, worktree dir `../<name>`. | `wt fix-login` → branch `fix-login`, dir `../fix-login` |
 | `wt <prefix> <name>` | Branch `<prefix>/<name>`, worktree dir `../<name>`. | `wt PR-26341 fix-login` → branch `PR-26341/fix-login`, dir `../fix-login` |
+| `wt <prefix>/<name>` | Same branch as the two-argument form, so it reopens the worktree that form created. | `wt PR-26341/fix-login` → tab in `../fix-login` |
 | `wt … -- <command…>` | Same, but the new tab runs `<command…>` instead of the configured claude command. | `wt dev -- cloudclaude --scope demo --agent developer` |
+| `wt --create …` | Create the worktree and stop — no tab, no command. Cannot be combined with `-- <command…>`. | `wt --create PR-26341 fix-login` |
 | `wt list` / `wt ls` | List worktrees (branch + path); marks the current one with `*`. | `wt ls` |
 | `wt remove <name>` / `wt rm <name>` | Remove the worktree, delete its branch, and remove its Claude project dir. Resolves `<name>` by branch, dir basename, or path. | `wt rm fix-login` |
 | `wt --help` | Show help. | `wt --help` |
@@ -81,7 +83,7 @@ Auto-detection inspects terminal-specific environment variables (`TERM_PROGRAM`,
 
 ## How it works
 
-- **Worktree** — `git worktree add` for the branch, created as a sibling directory of the repo root.
+- **Worktree** — `git worktree add` for the branch, created as a sibling directory of the repo root. If the branch is already checked out somewhere, that worktree is reused and only the tab opens — the branch, not a computed directory name, is what `wt` looks up, so both argument forms find the same worktree.
 - **Claude session** — a fresh `claude` (or whatever follows `--`) is launched in the new worktree; no state is copied. Project context comes along anyway: Claude Code shares its auto-memory across all worktrees of the same repository, and `CLAUDE.md` is part of the checkout.
 - **Cleanup** — `wt remove` deletes the worktree, its branch, and the worktree's `~/.claude/projects` dir, so removed worktrees don't leave stale session transcripts behind.
 
