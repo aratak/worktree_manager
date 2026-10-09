@@ -277,24 +277,45 @@ print_tabs_for() {
 open_iterm() {
   # Capture the new session's id here, at the one moment it is unambiguous:
   # nothing later can tell which of a window's sessions we just created.
+  # The tab goes into the window wt was called from, which is not iTerm's
+  # "current window" when the caller sits in a background one. No `activate`
+  # and no window select either: opening must not pull anything forward, only
+  # focusing may.
   local line guid
   line="cd $(sq "$new_path") && $(shell_join "${RUN_ARGV[@]}")"
-  if ! guid=$(osascript <<EOF
-tell application "iTerm"
-  activate
-  if (count of windows) = 0 then
-    set newSession to (current session of (create window with default profile))
-  else
-    tell current window
-      set newTab to (create tab with default profile)
+  if ! guid=$(osascript - "$(self_native)" "$line" <<'EOF'
+on run argv
+  set caller to item 1 of argv
+  tell application "iTerm"
+    if (count of windows) = 0 then
+      set newSession to (current session of (create window with default profile))
+    else
+      tell my windowOf(caller)
+        set newTab to (create tab with default profile)
+      end tell
+      set newSession to (current session of newTab)
+    end if
+    tell newSession
+      write text (item 2 of argv)
     end tell
-    set newSession to (current session of newTab)
-  end if
-  tell newSession
-    write text "$line"
+    return id of newSession
   end tell
-  return id of newSession
-end tell
+end run
+
+-- The window holding that session, or the frontmost one when no session
+-- matches: wt run from another terminal, or an id inherited through tmux.
+on windowOf(sessionId)
+  tell application "iTerm"
+    repeat with w in windows
+      repeat with t in tabs of w
+        repeat with s in sessions of t
+          if (id of s) is sessionId then return window id (id of w)
+        end repeat
+      end repeat
+    end repeat
+    return current window
+  end tell
+end windowOf
 EOF
   ); then
     echo "error: iTerm refused to open a tab" >&2
