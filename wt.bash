@@ -67,8 +67,8 @@ Config (~/.config/create_worktree/config.json):
             command and args are ignored when -- <command…> is given
   env       Extra environment variables (default: {})
   terminal  Terminal to open (default: "" = auto-detect). One of:
-            iterm, appleterm, tmux, kitty, wezterm, gnome, konsole,
-            alacritty, warp
+            iterm, cmux, appleterm, tmux, kitty, wezterm, gnome,
+            konsole, alacritty, warp
 EOF
   exit 0
 }
@@ -243,7 +243,8 @@ EOF
 # backend \t handle \t job, each backend enumerated at most once per wt process.
 # A backend whose query fails is unreachable, not empty: "no answer" must never
 # read as "no tabs", or one failed query would wipe the registry. Its rows are
-# kept and left unverified.
+# kept and left unverified. cmux is the everyday case — its socket admits only
+# processes cmux started, so from any other terminal it cannot be asked.
 
 ENUM=""
 ENUM_DONE=" "          # backends that answered, space-delimited
@@ -462,6 +463,82 @@ end run
 EOF
 }
 
+# cmux: a wt "tab" is a workspace, an entry in cmux's sidebar, which shows the
+# branch and the Claude session's state per workspace. The handle is the
+# workspace UUID. Refs like workspace:3 are numbered per app run and would
+# point at something else after a restart.
+
+# The caller's own window and workspace, as JSON; empty outside cmux. Asked
+# live rather than read from CMUX_WORKSPACE_ID, which keeps naming the old
+# workspace after the surface is moved to another one.
+cmux_caller() {
+  [ -n "${CMUX_SURFACE_ID:-}" ] || return 0
+  cmux --id-format uuids identify --json 2>/dev/null | jq -c '.caller // empty' || true
+}
+
+self_cmux() {
+  cmux_caller | jq -r '.workspace_id // empty'
+}
+
+open_cmux() {
+  # The workspace goes where wt was called from: into the caller's window and,
+  # when the caller sits in a workspace group, into that group right after it.
+  # Created through `cmux rpc` because `cmux workspace create` prints only a
+  # ref, while the RPC answers with the UUID — captured here, at the one moment
+  # it is unambiguous. initial_input is typed into the new shell, as iTerm's
+  # `write text` is, so the shell outlives the command. Created unfocused:
+  # opening must not pull anything forward, only focusing may.
+  local caller window workspace group params ws
+  caller=$(cmux_caller)
+  window=$(printf '%s' "$caller" | jq -r '.window_id // empty')
+  workspace=$(printf '%s' "$caller" | jq -r '.workspace_id // empty')
+  group=""
+  if [ -n "$workspace" ]; then
+    group=$(cmux rpc workspace.group.list '{}' | jq -r --arg w "$workspace" \
+      'first(.groups[] | select(any(.member_workspace_ids[]; . == $w))) | .id')
+  fi
+  params=$(jq -nc --arg cwd "$new_path" --arg line "$(shell_join "${RUN_ARGV[@]}")" \
+    --arg win "$window" --arg ws "$workspace" --arg g "$group" '
+    {cwd: $cwd, initial_input: ($line + "\r"), focus: false}
+    + (if $win == "" then {} else {window_id: $win} end)
+    + (if $g == "" then {} else
+        {group_id: $g, group_placement: "afterCurrent", group_reference_workspace_id: $ws} end)')
+  if ! ws=$(cmux rpc workspace.create "$params" | jq -r '.workspace_id // empty') || [ -z "$ws" ]; then
+    echo "error: cmux refused to open a workspace" >&2
+    return 1
+  fi
+  registry_add cmux "$ws" "$new_path"
+}
+
+# UUID \t title for every workspace in every window. No running check is
+# needed: unlike `tell application "iTerm"`, the cmux CLI never launches the
+# app. A failed query is silent on purpose — from outside cmux it fails every
+# time, and the "?" in `wt ls` already says the tabs went unverified.
+# Dispatched by name (list_$backend), which shellcheck cannot see — hence the
+# disable.
+# shellcheck disable=SC2329
+list_cmux() {
+  cmux --id-format uuids tree --all --json 2>/dev/null \
+    | jq -r '.windows[].workspaces[] | [.id, .title] | @tsv'
+}
+
+# --force because cmux refuses to close a workspace with a running process,
+# and a running claude is exactly what `wt close` was asked to close. It
+# answers with an error rather than a modal, so nothing can hang here.
+# Dispatched by name (close_$backend and friends), which shellcheck cannot
+# see — hence the disable.
+# shellcheck disable=SC2329
+close_cmux() {
+  cmux workspace close "$1" --force >/dev/null
+}
+
+# Dispatched by name (close_$backend and friends), which shellcheck cannot
+# see — hence the disable.
+# shellcheck disable=SC2329
+focus_cmux() {
+  cmux workspace select "$1" >/dev/null
+}
+
 open_appleterm() {
   # Terminal.app's AppleScript has no reliable "new tab"; do script opens a window.
   local line
@@ -508,6 +585,8 @@ EOF
 
 detect_terminal() {
   [ -n "${TMUX:-}" ] && { echo tmux; return; }
+  # Before TERM_PROGRAM: cmux sets it to "ghostty", the terminal it embeds.
+  [ -n "${CMUX_WORKSPACE_ID:-}" ] && { echo cmux; return; }
   case "${TERM_PROGRAM:-}" in
     iTerm.app)      echo iterm;     return ;;
     Apple_Terminal) echo appleterm; return ;;
@@ -890,9 +969,13 @@ the repo root.
   to retry.
 - Exit codes: **1** nothing matched the query, **2** that tab's terminal backend
   cannot close or focus tabs.
-- Only the iTerm backend tracks tabs. On every other terminal wt opens the tab
-  and forgets it, so `wt close` finds nothing and `wt ls` nests nothing —
-  `wt remove` still removes the worktree.
+- Only the iTerm and cmux backends track tabs. On every other terminal wt opens
+  the tab and forgets it, so `wt close` finds nothing and `wt ls` nests nothing
+  — `wt remove` still removes the worktree.
+- In cmux a wt "tab" is a workspace in the sidebar, opened in the caller's
+  window and workspace group. cmux answers only processes it started, so from
+  another terminal its tabs cannot be checked: `wt ls` shows them with job `?`,
+  and closing or focusing them fails. Run wt inside cmux for those.
 - **Do not `git worktree remove` a wt worktree by hand while a session runs in
   it.** That session does not crash; it silently keeps writing to a path that no
   longer exists. `wt rm` closes the tabs first, which is the whole point.
@@ -1116,7 +1199,7 @@ fi
 [ -z "$terminal" ] && terminal=$(detect_terminal)
 if [ -z "$terminal" ]; then
   echo "error: could not detect your terminal. Set \"terminal\" in $CONFIG_PATH" >&2
-  echo "       (one of: iterm, appleterm, tmux, kitty, wezterm, gnome, konsole, alacritty, warp)" >&2
+  echo "       (one of: iterm, cmux, appleterm, tmux, kitty, wezterm, gnome, konsole, alacritty, warp)" >&2
   exit 1
 fi
 
@@ -1129,6 +1212,7 @@ fi
 
 case "$terminal" in
   iterm)     open_iterm ;;
+  cmux)      open_cmux ;;
   appleterm) open_appleterm ;;
   tmux)      open_tmux ;;
   kitty)     open_kitty ;;

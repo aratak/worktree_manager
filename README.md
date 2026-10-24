@@ -80,6 +80,7 @@ Path: `~/.config/create_worktree/config.json`. Default:
 | Terminal | OS | Opens | Close / focus / list | Notes |
 | --- | --- | --- | --- | --- |
 | `iterm` | macOS | tab | yes | iTerm2. |
+| `cmux` | macOS | **workspace** | yes | Opened in the background, in the caller's window and workspace group, right after the caller. |
 | `appleterm` | macOS | **window** | no | Terminal.app — its AppleScript has no reliable new-tab, so a window is opened. |
 | `tmux` | any | window | no | Works headless / over SSH. |
 | `kitty` | any | tab | no | Needs `allow_remote_control` enabled. |
@@ -89,9 +90,9 @@ Path: `~/.config/create_worktree/config.json`. Default:
 | `alacritty` | Linux / any | **window** | no | Alacritty has no tabs, so a window is opened. |
 | `warp` | macOS + Linux | tab | no | Via a named YAML Tab Config opened through a `warp://tab_config/<name>` URI. |
 
-Every backend opens tabs. Only `iterm` also close, focus and list them: the rest were written from documentation, and a backend that can close your tabs is not something to ship untested. On those terminals `wt` opens the tab and forgets it — `wt close` finds nothing to close and `wt ls` nests nothing, while `wt remove` still removes the worktree. Adding one is purely additive, see [CONTRIBUTING.md](CONTRIBUTING.md).
+Every backend opens tabs. Only `iterm` and `cmux` also close, focus and list them: the rest were written from documentation, and a backend that can close your tabs is not something to ship untested. On those terminals `wt` opens the tab and forgets it — `wt close` finds nothing to close and `wt ls` nests nothing, while `wt remove` still removes the worktree. Adding one is purely additive, see [CONTRIBUTING.md](CONTRIBUTING.md).
 
-Auto-detection inspects terminal-specific environment variables (`TERM_PROGRAM`, `TMUX`, `KITTY_WINDOW_ID`, `WEZTERM_PANE`, `KONSOLE_VERSION`, `GNOME_TERMINAL_*`, `ALACRITTY_*`) and is best-effort. Generic terminals expose nothing useful — set `terminal` explicitly in the config when detection fails.
+Auto-detection inspects terminal-specific environment variables (`TERM_PROGRAM`, `TMUX`, `CMUX_WORKSPACE_ID`, `KITTY_WINDOW_ID`, `WEZTERM_PANE`, `KONSOLE_VERSION`, `GNOME_TERMINAL_*`, `ALACRITTY_*`) and is best-effort. Generic terminals expose nothing useful — set `terminal` explicitly in the config when detection fails.
 
 ## How it works
 
@@ -111,7 +112,8 @@ The `wt remove` cleanup relies on the path-encoding scheme that names dirs under
 - **Warp doesn't open a tab** — Warp needs its Tab Config directory to be writable (`~/.warp/tab_configs` on macOS, `${XDG_DATA_HOME:-~/.local/share}/warp-terminal/tab_configs` on Linux).
 - **Got a window instead of a tab** — Terminal.app (`appleterm`) and Alacritty (`alacritty`) have no usable tab API, so they open a new window by design.
 - **`wt close` hangs on iTerm** — the tab's profile has *Prompt before closing* enabled, and the modal it raises is waiting for an answer AppleScript cannot give. It's your setting, not `wt`'s to override: iTerm → Settings → Profiles → Session.
-- **`wt close` says there are no tabs** — only the iTerm backend tracks what it opens (see [Supported terminals](#supported-terminals)); elsewhere there is nothing for `wt` to close.
+- **cmux tabs show `?` in `wt ls`, and closing or focusing them fails with "access denied"** — cmux's socket admits only processes cmux started, so `wt` run from another terminal cannot reach it. Run `wt` inside cmux. Nothing is lost meanwhile: tabs that cannot be checked are kept, not pruned.
+- **`wt close` says there are no tabs** — only the iTerm and cmux backends track what they open (see [Supported terminals](#supported-terminals)); elsewhere there is nothing for `wt` to close.
 
 ## License
 

@@ -31,7 +31,7 @@ This is the most likely contribution. The terminal layer is the only platform-sp
 | `list_<name>` | no | Print `handle⇥job` for every live session, one per line. Exit non-zero when the terminal cannot be asked. |
 | `self_<name>` | no | Print the handle of the session `wt` itself runs in, or nothing. |
 
-Defining `close_<name>` is what opts a backend into `wt close`, `wt`'s focus-instead-of-open behaviour and the tabs nested under `wt ls`; it comes as a set with `focus_`, `list_` and `self_`, and needs `open_<name>` to register the tab (see `registry_add` in `open_iterm`). Support is probed with `declare -f`, never `type -t` — that also resolves executables on `PATH`, so a stray file named `close_kitty` would declare kitty supported. Backends without the set still open tabs exactly as before; `wt close` simply finds nothing of theirs.
+Defining `close_<name>` is what opts a backend into `wt close`, `wt`'s focus-instead-of-open behaviour and the tabs nested under `wt ls`; it comes as a set with `focus_`, `list_` and `self_`, and needs `open_<name>` to register the tab (see `registry_add` in `open_iterm` and `open_cmux`). Support is probed with `declare -f`, never `type -t` — that also resolves executables on `PATH`, so a stray file named `close_kitty` would declare kitty supported. Backends without the set still open tabs exactly as before; `wt close` simply finds nothing of theirs.
 
 Steps for the required part:
 
