@@ -211,16 +211,17 @@ registry_sync() {
 
   # Enumerate a terminal only when the registry holds rows for it: `tell
   # application "iTerm"` launches iTerm when it is closed, so an empty registry
-  # must cost zero osascript calls.
-  if printf '%s\n' "$rows" | awk -F'\t' '$2 == "iterm" { f = 1 } END { exit !f }'; then
-    iterm_enum_load
-  fi
+  # must cost zero terminal queries.
+  local backend
+  for backend in $(printf '%s\n' "$rows" | cut -f2 | sort -u); do
+    if declare -f "list_$backend" >/dev/null; then
+      enum_load "$backend"
+    fi
+  done
 
   dead=$(printf '%s\n' "$rows" | while IFS=$'\t' read -r uid backend worktree native; do
     [ -n "$uid" ] || continue
-    if [ ! -d "$worktree" ]; then
-      printf '%s\n' "$uid"
-    elif declare -f "alive_$backend" >/dev/null && ! "alive_$backend" "$native"; then
+    if [ ! -d "$worktree" ] || ! tab_alive "$backend" "$native"; then
       printf '%s\n' "$uid"
     fi
   done)
@@ -236,12 +237,44 @@ EOF
   fi
 }
 
-# Our own session's handle, empty when we are not sitting in a tab wt opened.
-# The ITERM_SESSION_ID prefix (w4t0p0:) goes stale the moment a tab is moved
-# between windows, so only the GUID after it is comparable.
+# ── Live sessions ─────────────────────────────────────────────────────────────
+# A backend that tracks tabs enumerates its live sessions with list_<name>,
+# which prints handle \t job per session. ENUM collects them as
+# backend \t handle \t job, each backend enumerated at most once per wt process.
+# A backend whose query fails is unreachable, not empty: "no answer" must never
+# read as "no tabs", or one failed query would wipe the registry. Its rows are
+# kept and left unverified.
+
+ENUM=""
+ENUM_DONE=" "          # backends that answered, space-delimited
+ENUM_UNREACHABLE=" "   # backends that were asked and could not answer
+
+enum_load() {
+  local backend="$1" out
+  case "$ENUM_DONE$ENUM_UNREACHABLE" in *" $backend "*) return 0 ;; esac
+  if out=$("list_$backend"); then
+    ENUM_DONE+="$backend "
+    if [ -n "$out" ]; then
+      ENUM+=$(printf '%s\n' "$out" | awk -v b="$backend" 'NF { print b "\t" $0 }')$'\n'
+    fi
+  else
+    ENUM_UNREACHABLE+="$backend "
+  fi
+}
+
+# Whether the terminal still knows the session. Only a backend that answered
+# can say no; one without list_<name>, or one that could not be asked, keeps
+# its rows.
+tab_alive() {
+  case "$ENUM_DONE" in *" $1 "*) ;; *) return 0 ;; esac
+  printf '%s' "$ENUM" | awk -F'\t' -v b="$1" -v h="$2" '$1 == b && $2 == h { f = 1 } END { exit !f }'
+}
+
+# Our own session's handle in that backend, empty when we are not sitting in
+# one of its sessions. A row with this handle is the tab wt is running in.
 self_native() {
-  local s="${ITERM_SESSION_ID:-}"
-  printf '%s' "${s#*:}"
+  declare -f "self_$1" >/dev/null || return 0
+  "self_$1"
 }
 
 uids_for_worktree() {
@@ -249,16 +282,17 @@ uids_for_worktree() {
     '.tabs | to_entries[] | select(.value.worktree == $w) | .key'
 }
 
-# worktree \t uid \t job, for every verified row. The running command is not
-# stored in the registry — iTerm reports it live as the session's "jobName" —
-# so it is joined in here from the enumeration. bash 3.2 has no associative
-# arrays, hence the two-input awk.
+# worktree \t uid \t job, for every row. The running command is not stored in
+# the registry — the terminal reports it live — so it is joined in here from
+# ENUM; a row its backend could not vouch for shows "?". The first input always
+# holds at least a newline, or awk's FNR == NR would swallow the second one.
+# bash 3.2 has no associative arrays, hence the two-input awk.
 verified_rows() {
   awk -F'\t' '
-    FNR == NR { if (NF) job[$1] = $2; next }
-    NF        { print $2 "\t" $1 "\t" job[$3] }
-  ' <(printf '%s\n' "$ITERM_ENUM") \
-    <(printf '%s' "$REG" | jq -r '.tabs | to_entries[] | [.key, .value.worktree, .value.native] | @tsv') \
+    FNR == NR { if (NF) job[$1 SUBSEP $2] = $3; next }
+    NF        { k = $3 SUBSEP $4; print $2 "\t" $1 "\t" ((k in job) ? job[k] : "?") }
+  ' <(printf '%s\n' "$ENUM") \
+    <(printf '%s' "$REG" | jq -r '.tabs | to_entries[] | [.key, .value.worktree, .value.backend, .value.native] | @tsv') \
     | sort
 }
 
@@ -270,9 +304,17 @@ print_tabs_for() {
 # open_<name> is the only required one: it opens a new tab — or a new window,
 # where the terminal has none — in the worktree directory and runs RUN_ARGV
 # there. Defining close_<name> opts the backend into close, focus and the tab
-# listing; everything is checked with `declare -f`, never `type -t`, which also
-# resolves executables on PATH. These live above the command dispatcher because
-# `wt close` must find them before the main flow is ever reached.
+# listing, together with focus_, list_ and self_; everything is checked with
+# `declare -f`, never `type -t`, which also resolves executables on PATH. These
+# live above the command dispatcher because `wt close` must find them before
+# the main flow is ever reached.
+
+# The ITERM_SESSION_ID prefix (w4t0p0:) goes stale the moment a tab is moved
+# between windows, so only the GUID after it is comparable.
+self_iterm() {
+  local s="${ITERM_SESSION_ID:-}"
+  printf '%s' "${s#*:}"
+}
 
 open_iterm() {
   # Capture the new session's id here, at the one moment it is unambiguous:
@@ -283,7 +325,7 @@ open_iterm() {
   # focusing may.
   local line guid
   line="cd $(sq "$new_path") && $(shell_join "${RUN_ARGV[@]}")"
-  if ! guid=$(osascript - "$(self_native)" "$line" <<'EOF'
+  if ! guid=$(osascript - "$(self_iterm)" "$line" <<'EOF'
 on run argv
   set caller to item 1 of argv
   tell application "iTerm"
@@ -324,11 +366,25 @@ EOF
   registry_add iterm "$guid" "$new_path"
 }
 
-# GUID \t jobName \t path for every live session. The script takes no
-# arguments on purpose: interpolating a path into AppleScript breaks on a " or
-# a \, so bash does the matching instead.
+# GUID \t jobName for every live session. It costs ~0.9s for ~20 sessions —
+# per call, not per session — which is why enum_load asks once per wt process.
+# Upgrade path if that ever bites: filter inside AppleScript instead of
+# returning everything. The script takes no arguments on purpose:
+# interpolating a path into AppleScript breaks on a " or a \, so bash does
+# the matching instead.
+# Dispatched by name (list_$backend), which shellcheck cannot see — hence the
+# disable.
+# shellcheck disable=SC2329
 list_iterm() {
-  osascript <<'EOF'
+  [ "$(uname -s)" = Darwin ] || return 0
+  # `running of application id …` is the form that does not launch iTerm.
+  # pgrep -x iTerm2 does not match it, the executable being a full path.
+  [ "$(osascript -e 'running of application id "com.googlecode.iterm2"' 2>/dev/null)" = true ] || return 0
+
+  # Empty output means "no sessions" and "the query failed" alike, and the
+  # error text is localized, so it cannot be matched on: branch on the exit
+  # code.
+  if ! osascript <<'EOF'
 set T9 to (ASCII character 9)
 set NL to (ASCII character 10)
 set out to {}
@@ -340,9 +396,8 @@ tell application "iTerm"
           set sid to (id of s)
           tell s
             set jn to (variable named "jobName")
-            set pp to (variable named "path")
           end tell
-          set end of out to (sid & T9 & jn & T9 & pp)
+          set end of out to (sid & T9 & jn)
         end try
       end repeat
     end repeat
@@ -351,6 +406,10 @@ end tell
 set AppleScript's text item delimiters to NL
 return out as text
 EOF
+  then
+    echo "warning: could not query iTerm (is Automation permission granted?); its tabs are left unverified" >&2
+    return 1
+  fi
 }
 
 # Deliberately select-free and without `activate`: closing must not yank the
@@ -401,39 +460,6 @@ on run argv
   end tell
 end run
 EOF
-}
-
-# Dispatched by name (close_$backend and friends), which shellcheck cannot
-# see — hence the disable.
-# shellcheck disable=SC2329
-alive_iterm() {
-  printf '%s\n' "$ITERM_ENUM" | awk -F'\t' -v want="$1" '$1 == want { f = 1 } END { exit !f }'
-}
-
-ITERM_ENUM=""
-ITERM_ENUM_LOADED=false
-
-# One enumeration per wt process, reused. It costs ~0.9s for ~20 live sessions
-# — per call, not per session — so ten separate queries would take ten seconds
-# and make `wt ls` feel broken. Upgrade path if that ever bites: filter inside
-# AppleScript instead of returning everything.
-iterm_enum_load() {
-  [ "$ITERM_ENUM_LOADED" = false ] || return 0
-  ITERM_ENUM_LOADED=true
-  ITERM_ENUM=""
-
-  [ "$(uname -s)" = Darwin ] || return 0
-  # `running of application id …` is the form that does not launch iTerm.
-  # pgrep -x iTerm2 does not match it, the executable being a full path.
-  [ "$(osascript -e 'running of application id "com.googlecode.iterm2"' 2>/dev/null)" = true ] || return 0
-
-  # Empty output means "no sessions" and "the query failed" alike, and the
-  # error text is localized, so it cannot be matched on: branch on the exit
-  # code and prune nothing when the query fails.
-  if ! ITERM_ENUM=$(list_iterm); then
-    echo "error: could not query iTerm (is Automation permission granted?)" >&2
-    exit 1
-  fi
 }
 
 open_appleterm() {
@@ -507,11 +533,11 @@ detect_terminal() {
 close_tabs() {
   local uid backend native self
   local -a gone=()
-  self=$(self_native)
 
   for uid in "$@"; do
     backend=$(printf '%s' "$REG" | jq -r --arg u "$uid" '.tabs[$u].backend')
     native=$(printf '%s' "$REG" | jq -r --arg u "$uid" '.tabs[$u].native')
+    self=$(self_native "$backend")
     if [ -n "$self" ] && [ "$native" = "$self" ]; then
       echo "skipped $uid (this tab)"
       continue
@@ -539,7 +565,7 @@ focus_tab() {
     exit 1
   fi
   native=$(printf '%s' "$REG" | jq -r --arg u "$uid" '.tabs[$u].native')
-  self=$(self_native)
+  self=$(self_native "$backend")
   if [ -n "$self" ] && [ "$native" = "$self" ]; then
     echo "tab: $uid (already here)"
     return 0
@@ -872,8 +898,8 @@ the repo root.
   longer exists. `wt rm` closes the tabs first, which is the whole point.
 - `wt rm` also deletes the branch and the worktree's `~/.claude/projects` dir.
   Use `wt close` when you want the worktree to survive.
-- `wt ls` costs about a second when tabs are registered (it asks iTerm) and is
-  instant when none are. Do not poll it in a loop.
+- `wt ls` costs about a second when iTerm tabs are registered (it asks iTerm)
+  and is near-instant otherwise. Do not poll it in a loop.
 
 ## Command reference
 

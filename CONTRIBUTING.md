@@ -28,10 +28,10 @@ This is the most likely contribution. The terminal layer is the only platform-sp
 | `open_<name>` | yes | Open a tab in `$new_path` and run `RUN_ARGV` there. |
 | `close_<name>` | no | Close the session with the given native handle. |
 | `focus_<name>` | no | Bring that session to the front. |
-| `list_<name>` | no | Print `handle⇥job⇥path` for every live session, one per line. |
-| `alive_<name>` | no | Exit 0 if the given handle is still a live session. |
+| `list_<name>` | no | Print `handle⇥job` for every live session, one per line. Exit non-zero when the terminal cannot be asked. |
+| `self_<name>` | no | Print the handle of the session `wt` itself runs in, or nothing. |
 
-Defining `close_<name>` is what opts a backend into `wt close`, `wt`'s focus-instead-of-open behaviour and the tabs nested under `wt ls`; it comes as a set with `focus_`, `alive_` and `list_`, and needs `open_<name>` to register the tab (see `registry_add` in `open_iterm`). Support is probed with `declare -f`, never `type -t` — that also resolves executables on `PATH`, so a stray file named `close_kitty` would declare kitty supported. Backends without the set still open tabs exactly as before; `wt close` simply finds nothing of theirs.
+Defining `close_<name>` is what opts a backend into `wt close`, `wt`'s focus-instead-of-open behaviour and the tabs nested under `wt ls`; it comes as a set with `focus_`, `list_` and `self_`, and needs `open_<name>` to register the tab (see `registry_add` in `open_iterm`). Support is probed with `declare -f`, never `type -t` — that also resolves executables on `PATH`, so a stray file named `close_kitty` would declare kitty supported. Backends without the set still open tabs exactly as before; `wt close` simply finds nothing of theirs.
 
 Steps for the required part:
 
@@ -44,7 +44,7 @@ Steps for the required part:
 4. **Add a `case` arm** in the dispatcher that calls your `open_<name>`.
 5. **Update the `usage()` terminal list** and the README [Supported terminals](README.md#supported-terminals) matrix.
 
-If you go on to the optional four, two things about the registry are worth knowing before you start. The handle you store must be one the terminal will still recognise later and one a session can read about *itself* — `close_iterm` and the self-skip in `wt close` both compare against it. And the registry is never trusted for liveness: `alive_<name>` is what decides, so every read prunes rows the terminal no longer knows.
+If you go on to the optional four, two things about the registry are worth knowing before you start. The handle you store must be one the terminal will still recognise later and one a session can read about *itself* — `close_<name>` and the self-skip in `wt close` (through `self_<name>`) both compare against it. And the registry is never trusted for liveness: `list_<name>` is what decides, so every read prunes rows the terminal no longer lists. That makes its exit code load-bearing — an empty list prunes every row of that backend, so a query that failed must exit non-zero, never print nothing. Not running is different from not answering: `list_iterm` prints nothing when iTerm is closed, because then its sessions really are gone.
 
 ## A note on the Claude Code coupling
 
