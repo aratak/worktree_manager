@@ -35,8 +35,8 @@ Configuration lives in `~/.config/create_worktree/`.
 | Command | Behavior | Example |
 | --- | --- | --- |
 | `wt <name>` | Branch `<name>`, worktree dir `../<name>`. | `wt fix-login` → branch `fix-login`, dir `../fix-login` |
-| `wt <prefix> <name>` | Branch `<prefix>/<name>`, worktree dir `../<name>`. | `wt PR-26341 fix-login` → branch `PR-26341/fix-login`, dir `../fix-login` |
-| `wt <prefix>/<name>` | Same branch as the two-argument form, so it reopens the worktree that form created. | `wt PR-26341/fix-login` → tab in `../fix-login` |
+| `wt <prefix> <name>` | Branch `<prefix>/<name>`, worktree dir `../<prefix>-<name>`. | `wt PR-26341 fix-login` → branch `PR-26341/fix-login`, dir `../PR-26341-fix-login` |
+| `wt <prefix>/<name>` | Same branch as the two-argument form, so it reopens the worktree that form created. | `wt PR-26341/fix-login` → tab in `../PR-26341-fix-login` |
 | `wt … -- <command…>` | Same, but the new tab runs `<command…>` instead of the configured claude command. | `wt dev -- cloudclaude --scope demo --agent developer` |
 | `wt --create …` | Create the worktree and stop — no tab, no command. Cannot be combined with `-- <command…>`. | `wt --create PR-26341 fix-login` |
 | `wt … --new-tab` | Open another tab even when `wt` already has one in that worktree. | `wt fix-login --new-tab` |
