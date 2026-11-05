@@ -24,8 +24,8 @@ usage() {
   cat <<'EOF'
 Usage:
   wt <name>                   branch: <name>,          dir: ../<name>
-  wt <prefix> <name>          branch: <prefix>/<name>, dir: ../<name>
-  wt <prefix>/<name>          same branch as the two-argument form
+  wt <prefix> <name>          branch: <prefix>/<name>, dir: ../<prefix>-<name>
+  wt <prefix>/<name>          same branch and dir as the two-argument form
   wt … -- <command…>          run <command…> in the new tab instead of claude
   wt … --create               create the worktree only, open no tab
   wt … --new-tab              always open a fresh tab
@@ -660,9 +660,9 @@ focus_tab() {
 # ── Worktrees ─────────────────────────────────────────────────────────────────
 
 # Directory of the worktree checked out on <branch>, empty if none. The branch
-# is the only stable handle we have: the directory cannot be derived from the
-# arguments, since `wt <prefix> <name>` puts branch <prefix>/<name> in ../<name>
-# while `wt <prefix>/<name>` would compute ../<prefix>-<name>.
+# is the handle: a worktree someone added by hand, or under an older directory
+# rule, still answers to its branch, whereas a directory we computed from the
+# arguments would miss it and ask git for a second checkout.
 worktree_for_branch() {
   git worktree list --porcelain | awk -v want="$1" '
     /^worktree / { path = substr($0, 10) }
@@ -683,10 +683,9 @@ resolve_worktree() {
   fi
 
   # Ordered fallbacks, mirroring what `wt list` shows: branch name first, then
-  # directory basename, then filesystem path. We can't derive the path from the
-  # name (`wt <prefix> <name>` makes branch <prefix>/<name> but directory
-  # ../<name>), so look the worktree up instead. Only the first tier with a hit
-  # is used; ambiguity within it is an error.
+  # directory basename, then filesystem path. The worktree is looked up rather
+  # than computed from the query, so one made by hand is found too. Only the
+  # first tier with a hit is used; ambiguity within it is an error.
   local match
   match=$(git worktree list --porcelain | awk -v q="$query" -v qp="$query_path" '
     function base(s) { sub(/.*\//, "", s); return s }
@@ -948,10 +947,11 @@ the repo root.
 
 ## The model, in three rules
 
-1. **The branch is the handle.** The directory cannot be derived from the
-   arguments — `wt PR-1 fix` makes branch `PR-1/fix` in `../fix` — so wt looks
-   the worktree up by branch. That is why `wt PR-1/fix` returns to the worktree
-   `wt PR-1 fix` created instead of making a second one.
+1. **The branch is the handle.** `wt PR-1 fix` and `wt PR-1/fix` both mean
+   branch `PR-1/fix`, and wt looks the worktree up by that branch rather than
+   by the directory it would compute (`../PR-1-fix`). That is why the second
+   form returns to the worktree the first created instead of making another,
+   and why a worktree added by hand is found as well.
 2. **wt owns only the tabs it opened.** A tab you opened by hand in a worktree
    is invisible to wt: it is never listed, never focused, never closed. Tabs wt
    opened get a uid like `wt-a1b2`, printed when they open and shown by `wt ls`.
@@ -1086,23 +1086,23 @@ fi
 
 if [ ${#positional[@]} -eq 2 ]; then
   branch="${positional[0]}/${positional[1]}"
-  name="${positional[1]}"
 else
   branch="${positional[0]}"
-  name="${positional[0]}"
 fi
 
-# Sanitize name for directory (replace / with -)
-dir_name="${name//\//-}"
+# The directory is the branch with every / turned into -, so payments/main and
+# auth/main get ../payments-main and ../auth-main rather than fighting over
+# ../main, and payments/refunds never lands on top of a plain refunds branch.
+dir_name="${branch//\//-}"
 
 # ── Git ──────────────────────────────────────────────────────────────────────
 
 repo_root=$(git rev-parse --show-toplevel)
 
-# Reuse the worktree the branch already lives in rather than computing a
-# directory for it. Both argument forms name the same branch, so this is what
-# makes `wt <prefix>/<name>` land on the worktree `wt <prefix> <name>` made
-# instead of asking git for a second checkout of a branch it already has.
+# Reuse the worktree the branch already lives in rather than trusting the
+# computed directory: a worktree added by hand, or made before the directory
+# rule changed, lives somewhere else, and git would refuse a second checkout
+# of the branch anyway.
 existing=$(worktree_for_branch "$branch")
 
 if [ -n "$existing" ]; then
